@@ -31,7 +31,7 @@ use crate::util::t::{Day, Month, Year, C};
 ///
 /// A leap year is a year with 366 days. Typical years have 365 days.
 pub(crate) fn is_leap_year(year: Year) -> bool {
-    year % C(4) == 0 && (year % C(100) != 0 || year % C(400) == 0)
+    datealgo::is_leap_year(year.get() as i32)
 }
 
 /// Returns true if and only if the given year is a leap year.
@@ -40,7 +40,7 @@ pub(crate) fn is_leap_year(year: Year) -> bool {
 ///
 /// This doesn't used range integers and is thus `const`.
 pub(crate) const fn is_leap_year_unranged(year: i16) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+    datealgo::is_leap_year(year as i32)
 }
 
 /// Saturates the given day in the month.
@@ -61,32 +61,17 @@ pub(crate) fn saturate_day_in_month(
 /// This correctly returns `29` when the year is a leap year and the month is
 /// February.
 pub(crate) fn days_in_month(year: Year, month: Month) -> Day {
-    if month == 2 && is_leap_year(year) {
-        Day::V::<29, 28, 31>()
-    } else {
-        days_in_month_common_year(month)
-    }
+    Day::new_unchecked(datealgo::days_in_month(year.get() as i32, month.get() as u8) as i8).clamp(Day::N::<28>(), Day::N::<31>())
 }
 
 /// Return the number of days in the given month.
 ///
 /// When the given month is invalid, this returns `0`.
 pub(crate) const fn days_in_month_unranged(year: i16, month: i8) -> i8 {
-    match month {
-        1 => 31,
-        2 if is_leap_year_unranged(year) => 29,
-        2 => 28,
-        3 => 31,
-        4 => 30,
-        5 => 31,
-        6 => 30,
-        7 => 31,
-        8 => 31,
-        9 => 30,
-        10 => 31,
-        11 => 30,
-        12 => 31,
-        _ => 0,
+    if month >= 1 || month <= 12 {
+        datealgo::days_in_month(year as i32, month as u8) as i8
+    } else {
+        0
     }
 }
 

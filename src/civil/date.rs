@@ -339,40 +339,8 @@ impl Date {
     /// ```
     #[inline]
     pub fn from_iso_week_date(weekdate: ISOWeekDate) -> Date {
-        let mut days = iso_week_start_from_year(weekdate.year_ranged());
-        let year = t::NoUnits16::rfrom(weekdate.year_ranged());
-        let week = t::NoUnits16::rfrom(weekdate.week_ranged());
-        let weekday = t::NoUnits16::rfrom(
-            weekdate.weekday().to_monday_zero_offset_ranged(),
-        );
-        let [week, weekday] = t::NoUnits16::vary_many(
-            [year, week, weekday],
-            |[year, week, weekday]| {
-                // This is weird, but because the max ISO week date is actually
-                // 9999-W52-4, we need to explicitly cap our maximum computed
-                // values here. This is only required because the maximums of
-                // each component of an ISO week date combine to represent an
-                // out-of-bounds Gregorian date.
-                //
-                // Note that this is purely done at the service of ranged
-                // integers. Otherwise, our ranged integers will compute a
-                // max value bigger than what can really occur, and then panic.
-                // So we use these caps to say, "no range integer, it truly
-                // won't exceed 9999-W52-4."
-                if year == 9999 {
-                    if week >= 52 {
-                        [week.min(C(52)), weekday.min(C(4))]
-                    } else {
-                        [week, weekday]
-                    }
-                } else {
-                    [week, weekday]
-                }
-            },
-        );
-        days += (UnixEpochDays::rfrom(week) - C(1)) * C(7);
-        days += weekday;
-        Date::from_unix_epoch_days(days)
+        let (year, month, day) = datealgo::isoweekdate_to_date((weekdate.year() as i32, weekdate.week() as u8, weekdate.weekday().to_monday_one_offset() as u8));
+        Date::new(year as i16, month as i8, day as i8).unwrap()
     }
 
     /// Create a builder for constructing a `Date` from the fields of this
@@ -528,7 +496,8 @@ impl Date {
     /// ```
     #[inline]
     pub fn weekday(self) -> Weekday {
-        weekday_from_unix_epoch_days(self.to_unix_epoch_days())
+        let weekday = datealgo::date_to_weekday((self.year.get() as i32, self.month.get() as u8, self.day.get() as u8));
+        Weekday::from_monday_one_offset(weekday as i8).unwrap()
     }
 
     /// Returns the ordinal day of the year that this date resides in.
@@ -751,9 +720,8 @@ impl Date {
     /// ```
     #[inline]
     pub fn tomorrow(self) -> Result<Date, Error> {
-        let day = self.to_unix_epoch_days();
-        let next = day.try_checked_add("days", C(1))?;
-        Ok(Date::from_unix_epoch_days(next))
+        let (year, month, day) = datealgo::next_date((self.year.get() as i32, self.month.get() as u8, self.day.get() as u8));
+        Date::new(year as i16, month as i8, day as i8)
     }
 
     /// Returns the date immediately preceding this one.
@@ -777,9 +745,8 @@ impl Date {
     /// ```
     #[inline]
     pub fn yesterday(self) -> Result<Date, Error> {
-        let day = self.to_unix_epoch_days();
-        let next = day.try_checked_sub("days", C(1))?;
-        Ok(Date::from_unix_epoch_days(next))
+        let (year, month, day) = datealgo::prev_date((self.year.get() as i32, self.month.get() as u8, self.day.get() as u8));
+        Date::new(year as i16, month as i8, day as i8)
     }
 
     /// Returns the "nth" weekday from the beginning or end of the month in
@@ -1106,35 +1073,8 @@ impl Date {
     /// ```
     #[inline]
     pub fn to_iso_week_date(self) -> ISOWeekDate {
-        let days = t::NoUnits32::rfrom(self.to_unix_epoch_days());
-        let year = t::NoUnits32::rfrom(self.year_ranged());
-        let week_start = t::NoUnits32::vary([days, year], |[days, year]| {
-            let mut week_start =
-                t::NoUnits32::rfrom(iso_week_start_from_year(year));
-            if days < week_start {
-                week_start =
-                    t::NoUnits32::rfrom(iso_week_start_from_year(year - C(1)));
-            } else {
-                let next_year_week_start =
-                    t::NoUnits32::rfrom(iso_week_start_from_year(year + C(1)));
-                if days >= next_year_week_start {
-                    week_start = next_year_week_start;
-                }
-            }
-            week_start
-        });
-
-        let weekday = weekday_from_unix_epoch_days(days);
-        let week = ((days - week_start) / C(7)) + C(1);
-        let year = Date::from_unix_epoch_days(
-            week_start
-                + t::NoUnits32::rfrom(
-                    Weekday::Thursday.since_ranged(Weekday::Monday),
-                ),
-        )
-        .year_ranged();
-        ISOWeekDate::new_ranged(year, week, weekday)
-            .expect("all Dates infallibly convert to ISOWeekDates")
+        let (year, week, weekday) = datealgo::date_to_isoweekdate((self.year.get() as i32, self.month.get() as u8, self.day.get() as u8));
+        ISOWeekDate::new(year as i16, week as i8, Weekday::from_monday_one_offset(weekday as i8).unwrap()).unwrap()
     }
 
     /// Converts a civil date to a [`Zoned`] datetime by adding the given
@@ -2222,73 +2162,16 @@ impl Date {
 
     #[inline]
     pub(crate) fn to_unix_epoch_days(self) -> UnixEpochDays {
-        // ref: http://howardhinnant.github.io/date_algorithms.html
-
-        let year = UnixEpochDays::rfrom(self.year);
-        let month = UnixEpochDays::rfrom(self.month);
-        let day = UnixEpochDays::rfrom(self.day);
-
-        let year = UnixEpochDays::vary([month, year], |[month, year]| {
-            if month <= 2 {
-                year - C(1)
-            } else {
-                year
-            }
-        });
-        let month = UnixEpochDays::vary([month], |[month]| {
-            if month > 2 {
-                month - C(3)
-            } else {
-                month + C(9)
-            }
-        });
-        let era = year / C(400);
-        let year_of_era = year % C(400);
-        let day_of_year = (C(153) * month + C(2)) / C(5) + day - C(1);
-        let day_of_era = year_of_era * C(365) + year_of_era / C(4)
-            - year_of_era / C(100)
-            + day_of_year;
-        let epoch_days = era * DAYS_IN_ERA + day_of_era
-            - DAYS_FROM_0000_01_01_TO_1970_01_01;
-        epoch_days
+        let rd = datealgo::date_to_rd((self.year.get() as i32, self.month.get() as u8, self.day.get() as u8));
+        UnixEpochDays::new_unchecked(rd)
     }
 
     #[inline]
     pub(crate) fn from_unix_epoch_days(
         days: impl RInto<UnixEpochDays>,
     ) -> Date {
-        // ref: http://howardhinnant.github.io/date_algorithms.html
-
-        let days = days.rinto();
-        let days = days + DAYS_FROM_0000_01_01_TO_1970_01_01;
-        let era = days / DAYS_IN_ERA;
-        let day_of_era = days % DAYS_IN_ERA;
-        let year_of_era = (day_of_era - day_of_era / C(1_460)
-            + day_of_era / C(36_524)
-            - day_of_era / (DAYS_IN_ERA - C(1)))
-            / C(365);
-        let year = year_of_era + era * C(400);
-        let day_of_year = day_of_era
-            - (C(365) * year_of_era + year_of_era / C(4)
-                - year_of_era / C(100));
-        let month = (day_of_year * C(5) + C(2)) / C(153);
-        let day = day_of_year - (C(153) * month + C(2)) / C(5) + C(1);
-        let month = UnixEpochDays::vary([month], |[month]| {
-            if month < 10 {
-                month + C(3)
-            } else {
-                month - C(9)
-            }
-        });
-        let year = UnixEpochDays::vary([month, year], |[month, year]| {
-            if month <= 2 {
-                year + C(1)
-            } else {
-                year
-            }
-        });
-
-        Date { year: year.rinto(), month: month.rinto(), day: day.rinto() }
+        let (year, month, day) = datealgo::rd_to_date(days.rinto().get());
+        Date::new(year as i16, month as i8, day as i8).unwrap()
     }
 }
 
