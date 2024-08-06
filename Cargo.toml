@@ -75,6 +75,7 @@ tzdb-zoneinfo = ["std"]
 js = ["wasm-bindgen", "js-sys"]
 
 [dependencies]
+datealgo = "0.2.1"
 jiff-tzdb = { version = "0.1.0", path = "jiff-tzdb", optional = true }
 log = { version = "0.4.21", optional = true }
 serde = { version = "1.0.203", optional = true }
